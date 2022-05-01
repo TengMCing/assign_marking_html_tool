@@ -1,0 +1,219 @@
+---
+title: "Marking Template"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, results = "asis", comment = "")
+```
+
+```{r}
+library(glue)
+library(tidyverse)
+```
+
+
+```{r}
+new_question <- function(name, mark) {
+  return(list(name = name, mark = mark, sub_questions = list()))
+}
+
+new_subquestion <- function(question, name, mark) {
+  question$sub_questions[[name]] <- list(name = name, mark = mark, sliders = list())
+
+  return(question)
+}
+
+add_slider <- function(question, name, mark, checklist, sub_question = "last") {
+  
+  if (sub_question == "last") sub_question <- length(question$sub_questions)
+  
+  question$sub_questions[[sub_question]]$sliders[[name]] <- list(name = name, 
+                                                                 mark = mark,
+                                                                 checklist = checklist)
+  return(question)
+}
+
+new_checklist <- function(..., marks = NULL) {
+  call_list <- as.list(sys.call())[-1]
+  call_list[["marks"]] <- NULL
+  if (is.null(names(call_list)) || "" %in% names(call_list)) stop("All items in checklist need to be provided with descriptions and feedbacks.")
+  if (is.null(marks) || length(marks) != length(call_list)) stop("All items in checklist need to be provided with suggested marks.")
+  for (i in 1:length(call_list)) {
+    call_list[[i]] <- list(desc = names(call_list)[i], feedback = call_list[[i]], mark = marks[i])
+  }
+  return(call_list)
+}
+```
+
+
+```{r}
+render_slider_widget <- function(id, min_limit, max_limit, default = 0) {
+  cat(glue("<input type='range' value='{min_limit*2}' max='{max_limit*2}' oninput='{id}.value = this.value/2'>\n\n"))
+  cat(glue("<output id='{id}'>{default}</output>\n\n"))
+  cat("<br>\n\n")
+  
+  return(id)
+}
+
+render_checklist_widget <- function(id, checklist, default) {
+  cat(glue("<p>Suggested marks: <output id='{id}'>{default}</output></p>\n\n"))
+  for (i in 1:length(checklist)) {
+    cat(glue("<input type='checkbox' id='{id}_{i}' onclick='handle_checklist(\"{id}\", \"{id}_{i}\", \"{id}_text_area\",  Number(({id}_{i}.checked*2-1)*{checklist[[i]]$mark}), \"{checklist[[i]]$feedback}\")'>\n\n"))
+    cat(glue("<label for='{id}_{i}'>{checklist[[i]]$desc} ({checklist[[i]]$mark})</label>\n\n"))
+    cat("<br>\n\n")
+  }
+  cat("<br>\n\n")
+  cat(glue("<textarea type='text' style='width:500px;height:100px' placeholder='comment' id='{id}_text_area'></textarea>\n\n"))
+  
+  return(glue("{id}_text_area"))
+}
+
+render_slider <- function(slider, prefix = "a") {
+  cat(glue("<p>{slider$name}</p>\n\n"))
+  slider_id <- render_slider_widget(glue("{prefix}_{slider$name}_slider"), 0, slider$mark)
+  text_area_id <- render_checklist_widget(glue("{prefix}_{slider$name}_checklist"), slider$checklist, 0)
+  
+  return(c(slider_id, text_area_id))
+}
+
+render_subquestion <- function(sub_question, prefix = "a") {
+  cat(glue("<h2>{sub_question$name} ({sub_question$mark})</h2>\n\n"))
+  sub_question_ids <- list(slider_id = c(), text_area_id = c())
+  
+  if (length(sub_question$sliders) == 0) stop("Need to provide at least one slider for a subquestion.")
+  
+  for (slider in sub_question$sliders) {
+    id_list <- render_slider(slider, prefix = glue("{prefix}_{sub_question$name}"))
+    sub_question_ids$slider_id <- c(sub_question_ids$slider_id, id_list[1])
+    sub_question_ids$text_area_id <- c(sub_question_ids$text_area_id, id_list[2])
+  }
+  
+  return(sub_question_ids)
+}
+
+render_handle_checklist <- function() {
+  cat("<script>\n\n")
+  cat("function handle_checklist(value_id, checkbox_id, text_area_id, add_value, add_text) {
+  document.getElementById(value_id).value = Number(document.getElementById(value_id).value) + Number(add_value);
+  if (add_text == '') {return 0;}
+  add_text = add_text + ' ';
+  document.getElementById(text_area_id).value = document.getElementById(text_area_id).value.replace(add_text, '');
+      if (document.getElementById(checkbox_id).checked) {
+        document.getElementById(text_area_id).value = document.getElementById(text_area_id).value + add_text 
+      }
+  }\n\n")
+  cat("</script>\n\n")
+}
+
+render_question <- function(question, align = "center") {
+  cat(glue("<div align='{align}'>\n\n"))
+  cat(glue("<h1>{question$name}</h1>\n\n"))
+  
+  question_id <- list()
+  
+  for (sub_question in question$sub_questions) {
+    question_id[[sub_question$name]] <- render_subquestion(sub_question, prefix = question$name)
+  }
+  cat(glue("</div>\n\n"))
+  
+  return(question_id)
+}
+
+render_submit_button <- function(name = "Get comments!", align = "center") {
+  cat(glue("<div align='{align}'>\n\n"))
+  cat("<h1>Results</h1>\n\n")
+  cat(glue("<button type='button' onclick='handle_button()'>{name}</button>\n\n"))
+  cat("<br>\n\n")
+  cat("<br>\n\n")
+  cat("<textarea id='final_comments' style='width:500px;height:300px;'></textarea>")
+  cat("</div>")
+}
+
+
+render_handle_button <- function(all_question_id, question_list) {
+  cat("<script>\n\n")
+  cat("function get_value(id) {return document.getElementById(id).value}\n\n")
+  cat("function handle_button() {\n\n")
+  
+  cat("    final_str = '';\n\n")
+
+  for (i in 1:length(all_question_id)) {
+    
+    cat(glue("    // {question_list[[i]]$name}\n\n", .trim = FALSE))
+    
+    cat("    question_total = 0;\n\n")
+    
+    for (j in 1:length(all_question_id[[i]])) {
+      
+      cat(glue("    // {question_list[[i]]$sub_questions[[j]]$name}\n\n", .trim = FALSE))
+      
+      var_name <- glue("{names(all_question_id)[i]}{names(all_question_id[[i]])[j]}")
+      var_name_ <- glue("{names(all_question_id)[i]}_{names(all_question_id[[i]])[j]}")
+        
+      cat(glue("    {var_name_}_sliders = [\"{paste0(all_question_id[[i]][[j]]$slider_id, collapse = '\", \"')}\"];\n", .trim = FALSE))
+      cat(glue("    {var_name_}_text_areas = [\"{paste0(all_question_id[[i]][[j]]$text_area_id, collapse = '\", \"')}\"];\n\n", .trim = FALSE))
+      
+      cat("    total = 0;\n\n")
+      cat("    all_text = '';\n\n")
+      cat(glue("    for (id in {{var_name_}}_sliders) {total = Number(total) + Number(get_value({{var_name_}}_sliders[id]))}\n\n", .trim = FALSE, .open = "{{", .close = "}}"))
+      cat(glue("    for (id in {{var_name_}}_text_areas) {all_text = all_text + get_value({{var_name_}}_text_areas[id])}\n\n", .trim = FALSE, .open = "{{", .close = "}}"))
+      cat("    if (all_text == '') all_text = ['Excellent!', 'Great work!', 'Well done!', 'Good!', 'Good job!', 'Nice!', 'Nice work!'][Math.floor(Math.random() * 7)];\n\n")
+      cat(glue("    final_str = final_str + `{{var_name}}: ${total}/{{question_list[[i]]$sub_questions[[j]]$mark}} ${all_text} \\n`\n\n", .open = "{{", .close = "}}", .trim = FALSE))
+      cat("    question_total = question_total + total;\n\n")
+    }
+    
+    cat(glue("    final_str = final_str + `{{names(all_question_id)[i]}} total: ${question_total}/{{question_list[[i]]$mark}}\\n\\n`\n\n", .open = "{{", .close = "}}", .trim = FALSE))
+  }
+  
+  cat("    document.getElementById('final_comments').value = final_str;")
+  
+  cat("}\n\n")
+  cat("</script>\n\n")
+}
+
+render_questions <- function(...) {
+  question_list <- list(...)
+  all_question_id <- list()
+  
+  for (question in question_list) {
+    all_question_id[[question$name]] <- render_question(question)
+  }
+  render_handle_checklist()
+  render_submit_button()
+  render_handle_button(all_question_id, question_list)
+}
+```
+
+
+```{r}
+q1 <- new_question("Q1", 4) %>%
+  new_subquestion("a", 2) %>%
+  add_slider("Plot", 1, new_checklist("Plot is basically correct" = "",
+                                      "x axis doesn't look right" = "You need to fix x axis.",
+                                      "y axis doesn't look right" = "You need to fix y axis.",
+                                      marks = c(1, -0.5, -0.5))) %>%
+  add_slider("Answer", 1, new_checklist("Answer is basically correct"= "",
+                                        "x doesn't look right" = "You need to fix x.",
+                                        "y doesn't look right" = "You need to fix y.",
+                                        marks = c(1, -0.5, -0.5))) %>%
+  new_subquestion("b", 2) %>%
+  add_slider("Answer", 2, new_checklist("Answer is OK" = "",
+                                        marks = c(2)))
+
+q2 <- new_question("Q2", 2) %>%
+  new_subquestion("a", 2) %>%
+  add_slider("Plot", 1, new_checklist("Plot is basically correct" = "",
+                                      "x axis doesn't look right" = "You need to fix x axis.",
+                                      "y axis doesn't look right" = "You need to fix y axis.",
+                                      marks = c(1, -0.5, -0.5))) %>%
+  add_slider("Answer", 1, new_checklist("Answer is basically correct"= "",
+                                        "x doesn't look right" = "You need to fix x.",
+                                        "y doesn't look right" = "You need to fix y.",
+                                        marks = c(1, -0.5, -0.5))) 
+
+render_questions(q1, q2) %>%
+  capture.output(file = "marking.html")
+```
+
+
